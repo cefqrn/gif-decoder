@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from struct import unpack
-from typing import NamedTuple, Optional
+from typing import Optional
 from enum import Enum
 
 type Parsed[T] = Optional[tuple[bytes, T]]
@@ -12,13 +13,15 @@ type Parsed[T] = Optional[tuple[bytes, T]]
 class ParseError(Exception): ...
 
 
-class Screen(NamedTuple):
+@dataclass
+class Screen:
     width: int
     height: int
     global_color_table_size: int
 
 
-class Image(NamedTuple):
+@dataclass
+class Image:
     local_color_table_size: int
 
 
