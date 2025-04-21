@@ -1,28 +1,19 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from collections.abc import MutableSequence
 from dataclasses import dataclass
 from functools import wraps
-from pathlib import Path
-from struct import unpack
-from typing import Optional
+from itertools import chain, repeat
+from struct import pack, unpack
 from enum import Enum
 
-type Parsed[T] = Optional[tuple[bytes, T]]
+from typing import ClassVar, Optional, Self
 
+type Parsed[T] = tuple[bytes, T]
 
-class ParseError(Exception): ...
-
-
-@dataclass
-class Screen:
-    width: int
-    height: int
-    global_color_table_size: int
-
-
-@dataclass
-class Image:
-    local_color_table_size: int
+type SubBlock = bytes
+type Block = list[SubBlock]
 
 
 class SectionType(Enum):
@@ -32,187 +23,379 @@ class SectionType(Enum):
 
 
 class ExtensionType(Enum):
-    PLAIN_TEXT      = 0x01
+    # PLAIN_TEXT      = 0x01
     GRAPHIC_CONTROL = 0xF9
-    COMMENT         = 0xFE
+    # COMMENT         = 0xFE
     APPLICATION     = 0xFF
 
 
-def stream_length_at_least(length):
-    def wrapper(f):
-        @wraps(f)
-        def inner(stream, *args, **kwargs):
-            if len(stream) < length:
-                raise ParseError("unexpected end of stream")
-
-            return f(stream, *args, **kwargs)
-
-        return inner
-
-    return wrapper
+class ParseError(ValueError): ...
 
 
-@stream_length_at_least(6)
-def parse_header(stream: bytes) -> Parsed[None]:
-    # doesn't handle GIF87a
-    if stream[:6] != b"GIF89a":
-        raise ParseError("cannot handle stream (incorrect header)")
+class Serializable(ABC):
+    @classmethod
+    @abstractmethod
+    def decode(cls, stream: bytes, *args, **kwargs) -> Parsed[Self]:
+        ...
 
-    return stream[6:], None
+    @abstractmethod
+    def encode(self) -> bytes:
+        ...
+
+    @staticmethod
+    def stream_length_at_least(length):
+        def wrapper(f):
+            @wraps(f)
+            def inner(cls, stream, *args, **kwargs):
+                if len(stream) < length:
+                    raise ParseError("unexpected end of stream")
+
+                return f(cls, stream, *args, **kwargs)
+
+            return inner
+
+        return wrapper
 
 
-@stream_length_at_least(7)
-def parse_logical_screen_descriptor(stream: bytes) -> Parsed[Screen]:
-    image_width, image_height, packed_fields, *_ = unpack("<HHBBB", stream[:7])
+@dataclass
+class Color(Serializable):
+    DEFAULT: ClassVar[Color]
 
-    has_global_color_table = bool(packed_fields >> 7)
-    global_color_table_size = 3 * 2 ** ((packed_fields & 7) + 1)
+    red: int
+    green: int
+    blue: int
 
-    return stream[7:], Screen(
-        image_width,
-        image_height,
-        global_color_table_size if has_global_color_table else 0
-    )
+    @classmethod
+    @Serializable.stream_length_at_least(3)
+    def decode(cls, stream):
+        return stream[3:], cls(*stream[:3])
+
+    def encode(self):
+        return bytes([self.red, self.green, self.blue])
 
 
-def skip_bytes(stream: bytes, offset: int) -> Parsed[None]:
-    if len(stream) < offset:
+Color.DEFAULT = Color(0, 0, 0)
+
+
+@dataclass
+class ColorTable(MutableSequence[Color], Serializable):
+    MAX_SIZE: ClassVar[int] = 256
+
+    data: list[Color]
+    is_sorted: bool
+
+    # transparent color index for local color tables
+    background_color_index: Optional[int]
+
+    @classmethod
+    def decode(cls, stream: bytes, size: int, is_sorted: bool, background_color_index: Optional[int]):
+        if size not in range(1, cls.MAX_SIZE + 1):
+            raise ParseError("invalid color table size")
+
+        data = []
+        for _ in range(size):
+            stream, color = Color.decode(stream)
+            data.append(color)
+
+        return stream, cls(data, is_sorted, background_color_index)
+
+    def encode(self):
+        if len(self) == 0:
+            return b""
+
+        length_bit_count = (len(self) - 1).bit_length()
+        padding_length = 2**length_bit_count - len(self)
+
+        return b"".join(map(Color.encode, chain(self.data, repeat(Color.DEFAULT, padding_length))))
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        return self.data[i]
+
+    def __setitem__(self, i, color):
+        self.data[i] = color
+
+    def __delitem__(self, i):
+        del self.data[i]
+
+    def insert(self, i, color):
+        if len(self.data) == ColorTable.MAX_SIZE:
+            raise ValueError("color table too big")
+
+        self.data.insert(i, color)
+        if self.background_color_index is not None and i < self.background_color_index:
+            self.background_color_index += 1
+
+
+@dataclass
+class Screen(Serializable):
+    width: int
+    height: int
+    color_table: Optional[ColorTable]
+    color_resolution: int
+    pixel_aspect_ratio: int
+
+    @classmethod
+    @Serializable.stream_length_at_least(7)
+    def decode(cls, stream: bytes):
+        width, height, packed_fields, background_color_index, pixel_aspect_ratio = unpack("<HHBBB", stream[:7])
+        stream = stream[7:]
+
+        has_color_table =    bool((packed_fields >> 7) & 1)
+        color_resolution =        (packed_fields >> 4) & 7
+        color_table_is_sorted =   (packed_fields >> 3) & 1
+        color_table_size = 2 ** (((packed_fields >> 0) & 7) + 1)
+
+        color_table = None
+        if has_color_table:
+            stream, color_table = ColorTable.decode(stream, color_table_size, color_table_is_sorted, background_color_index)
+
+        return stream, Screen(width, height, color_table, color_resolution, pixel_aspect_ratio)
+
+    def encode(self):
+        packed_fields = self.color_resolution << 4
+        background_color_index = 0
+        if self.color_table is not None:
+            packed_fields |=                                              1 << 7  # has color table
+            packed_fields |=                     self.color_table.is_sorted << 3
+            packed_fields |= ((len(self.color_table) - 1).bit_length() - 1) << 0  # color table size
+            background_color_index = self.color_table.background_color_index or 0
+
+        result = pack("<HHBBB", self.width, self.height, packed_fields, background_color_index, self.pixel_aspect_ratio)
+        if self.color_table is not None:
+            result += self.color_table.encode()
+
+        return result
+
+
+def decode_subblock(stream: bytes) -> Parsed[SubBlock]:
+    if len(stream) < 1:
         raise ParseError("unexpected end of stream")
 
-    return stream[offset:], None
-
-
-def parse_section_type(stream: bytes) -> Parsed[SectionType]:
-    try:
-        return stream[1:], SectionType(stream[0])
-    except ValueError:
-        raise ParseError(f"unknown extension type, got 0x{stream[0]:02X}") from None
-
-
-
-@stream_length_at_least(1)
-def parse_extension_type(stream: bytes) -> Parsed[ExtensionType]:
-    try:
-        return stream[1:], ExtensionType(stream[0])
-    except ValueError:
-        raise ParseError(f"unknown extension type, got 0x{stream[0]:02X}") from None
-
-
-@stream_length_at_least(1)
-def parse_sub_block(stream: bytes) -> Parsed[bytes]:
     length = stream[0]
-    if len(stream[1:]) < length:
+    stream = stream[1:]
+
+    if len(stream) < length:
         raise ParseError("unexpected end of stream")
 
-    return stream[1+length:], stream[1:1+length]
+    return stream[length:], stream[:length]
 
 
-def parse_block(stream: bytes) -> Parsed[bytes]:
-    data = []
+def encode_subblock(subblock: SubBlock) -> bytes:
+    return bytes([len(subblock)]) + subblock
+
+
+TERMINATOR_SUBBLOCK = b""
+
+
+def decode_block(stream: bytes) -> Parsed[Block]:
+    block = []
     while True:
-        stream, block_data = parse_sub_block(stream)
-        if block_data:
-            data.append(block_data)
-        else:
+        stream, subblock = decode_subblock(stream)
+        if subblock == TERMINATOR_SUBBLOCK:
             break
 
-    return stream, b"".join(data)
+        block.append(subblock)
+
+    return stream, block
 
 
-def parse_comment_extension(stream: bytes) -> Parsed[str]:
-    stream, data = parse_block(stream)
-    try:
-        return stream, data.decode("ascii")
-    except UnicodeError as e:
-        raise ParseError("failed to decode comment") from e
+def encode_block(block: Block) -> bytes:
+    return b"".join(map(encode_subblock, chain(block, [TERMINATOR_SUBBLOCK])))
 
 
-@stream_length_at_least(13)
-def parse_plain_text_extension(stream: bytes) -> Parsed[None]:
-    return stream[13:], None
+@dataclass
+class GraphicControlExtension(Serializable):
+    disposal_method: int
+    waits_for_user_input: int
+    delay_time: int
+    transparent_color_index: Optional[int]
 
-@stream_length_at_least(12)
-def parse_application_extension(stream: bytes) -> Parsed[None]:
-    if stream[0] != 11:
-        raise ParseError("invalid application extension initial block length")
+    @classmethod
+    def decode(cls, stream: bytes):
+        stream, block = decode_block(stream)
+        if len(block) != 1:
+            raise ParseError("too many blocks in graphic control extension")
 
-    identifier, authentication_code = stream[1:9], stream[9:12]
-    print("application extension:", identifier, authentication_code)
+        if len(block[0]) != 4:
+            raise ParseError("invalid graphic control extension initial block size")
 
-    stream, _ = parse_block(stream[12:])
+        packed_fields, delay_time, transparent_color_index = unpack("<BHB", block[0])
 
-    return stream, None
+        has_transparent_color = bool((packed_fields >> 0) & 1)
+        waits_for_user_input  = bool((packed_fields >> 1) & 1)
+        disposal_method =            (packed_fields >> 2) & 7
+        if not has_transparent_color:
+            transparent_color_index = None
 
-@stream_length_at_least(6)
-def parse_graphic_control_extension(stream: bytes) -> Parsed[None]:
-    if stream[0] != 4:
-        raise ParseError("invalid graphic control extension initial block length")
-
-    if stream[5] != 0:
-        raise ParseError("invalid graphic control extension block terminator")
-
-    return stream[6:], None
-
-
-@stream_length_at_least(9)
-def parse_image_descriptor(stream: bytes) -> Parsed[None]:
-    *_, packed_fields = unpack("<HHHHB", stream[:9])
-
-    has_local_color_table = bool(packed_fields >> 7)
-    local_color_table_size = 3 * 2 ** ((packed_fields & 7) + 1)
-
-    return stream[9:], Image(
-        local_color_table_size if has_local_color_table else 0
-    )
+        return stream, cls(disposal_method, waits_for_user_input, delay_time, transparent_color_index)
 
 
-INPUT_DIRECTORY = Path()
-INPUT_FILENAME = "test.gif"
+    def encode(self):
+        packed_fields = (self.disposal_method << 2) | (self.waits_for_user_input << 1)
+        if self.transparent_color_index is not None:
+            packed_fields |= 1 << 0  # has transparent color
 
-input_path = INPUT_DIRECTORY / INPUT_FILENAME
-
-stream = input_path.read_bytes()
-try:
-    stream, _      = parse_header(stream)
-    stream, screen = parse_logical_screen_descriptor(stream)
-    stream, _      = skip_bytes(stream, screen.global_color_table_size)
-    while True:
-        # print(stream[:20].hex())
-        stream, section_type = parse_section_type(stream)
-        print(section_type)
-        match section_type:
-            case SectionType.EXTENSION:
-                stream, extension_type = parse_extension_type(stream)
-                match extension_type:
-                    case ExtensionType.PLAIN_TEXT:
-                        stream, _       = parse_plain_text_extension(stream)
-                    case ExtensionType.COMMENT:
-                        stream, comment = parse_comment_extension(stream)
-                        print("comment:", comment)
-                    case ExtensionType.APPLICATION:
-                        stream, _       = parse_application_extension(stream)
-                    case ExtensionType.GRAPHIC_CONTROL:
-                        stream, _       = parse_graphic_control_extension(stream)
-            case SectionType.IMAGE:
-                stream, image = parse_image_descriptor(stream)
-                stream, _     = skip_bytes(stream, image.local_color_table_size)
-                stream, _     = skip_bytes(stream, 1)
-                stream, _     = parse_block(stream)
-            case SectionType.TRAILER:
-                break
-except ParseError as e:
-    print("failed to parse:", e)
+        return bytes([SectionType.EXTENSION.value, ExtensionType.GRAPHIC_CONTROL.value]) \
+             + encode_block([pack("<BHB", packed_fields, self.delay_time, self.transparent_color_index or 0)])
 
 
-"""
-<GIF Data Stream> ::=     Header <Logical Screen> <Data>* Trailer
-<Logical Screen> ::=      Logical Screen Descriptor [Global Color Table]
-<Data> ::=                <Graphic Block>  |
-                          <Special-Purpose Block>
-<Graphic Block> ::=       [Graphic Control Extension] <Graphic-Rendering Block>
-<Graphic-Rendering Block> ::=  <Table-Based Image>  |
-                               Plain Text Extension
-<Table-Based Image> ::=   Image Descriptor [Local Color Table] Image Data
-<Special-Purpose Block> ::=    Application Extension  |
-                               Comment Extension
-"""
+class Section(Serializable): ...
+
+
+@dataclass
+class ApplicationExtension(Section):
+    identifier: bytes
+    authentication_code: bytes
+    data: Block
+
+    @classmethod
+    def decode(cls, stream: bytes):
+        stream, block = decode_block(stream)
+        if len(block) < 1:
+            raise ParseError("empty application extension")
+
+        if len(block[0]) != 11:
+            raise ParseError("invalid initial application extension block size")
+
+        identifier = block[0][:8]
+        authentication_code = block[0][8:]
+
+        return stream, cls(identifier, authentication_code, block[1:])
+
+    def encode(self):
+        return bytes([SectionType.EXTENSION.value, ExtensionType.APPLICATION.value]) \
+             + encode_block([self.identifier + self.authentication_code] + self.data)
+
+
+@dataclass
+class Image(Section):
+    graphic_control_extension: Optional[GraphicControlExtension]
+    left: int
+    top: int
+    width: int
+    height: int
+    color_table: Optional[ColorTable]
+    is_interlaced: bool
+    minimum_code_size: int
+    data: Block
+
+    @classmethod
+    @Serializable.stream_length_at_least(9)
+    def decode(cls, stream: bytes, graphic_control_extension: GraphicControlExtension):
+        left, top, width, height, packed_fields = unpack("<HHHHB", stream[:9])
+        stream = stream[9:]
+
+        has_color_table = bool(packed_fields >> 7)
+
+        has_color_table =    bool((packed_fields >> 7) & 1)
+        is_interlaced =      bool((packed_fields >> 6) & 1)
+        color_table_is_sorted =   (packed_fields >> 5) & 1
+        color_table_size = 2 ** (((packed_fields >> 0) & 7) + 1)
+
+        color_table = None
+        if has_color_table:
+            transparent_color_index = None
+            if graphic_control_extension is not None:
+                transparent_color_index = graphic_control_extension.transparent_color_index
+
+            stream, color_table = ColorTable.decode(stream, color_table_size, color_table_is_sorted, transparent_color_index)
+
+
+        minimum_code_size = stream[0]
+        stream = stream[1:]
+
+        stream, data = decode_block(stream)
+
+        return stream, cls(graphic_control_extension, left, top, width, height, color_table, is_interlaced, minimum_code_size, data)
+
+    def encode(self):
+        packed_fields = self.is_interlaced << 6
+        if self.color_table is not None:
+            packed_fields |=                                              1 << 7  # has color table
+            packed_fields |=                     self.color_table.is_sorted << 5
+            packed_fields |= ((len(self.color_table) - 1).bit_length() - 1) << 0  # color table size
+
+        result = b""
+
+        if self.graphic_control_extension is not None:
+            result += self.graphic_control_extension.encode()
+
+        result += bytes([SectionType.IMAGE.value]) + pack("<HHHHB", self.left, self.top, self.width, self.height, packed_fields)
+
+        if self.color_table is not None:
+            result += self.color_table.encode()
+
+        result += bytes([self.minimum_code_size]) + encode_block(self.data)
+
+        return result
+
+
+@dataclass
+class GIF(Serializable):
+    signature: bytes
+    version: bytes
+    screen: Screen
+    sections: list[Section]
+
+    @classmethod
+    @Serializable.stream_length_at_least(6)
+    def decode(cls, stream: bytes):
+        if stream[:3] != b"GIF":
+            raise ParseError(f"invalid signature: {stream[:3]!r}")
+
+        if stream[3:6] not in (b"87a", b"89a"):
+            raise ParseError(f"invalid version: {stream[3:6]!r}")
+
+        signature, version = stream[:3], stream[3:6]
+        stream = stream[6:]
+
+        stream, screen = Screen.decode(stream)
+
+        graphic_control_extension: Optional[GraphicControlExtension] = None
+        sections: list[Section] = []
+        while True:
+            try:
+                section_type = SectionType(stream[0])
+            except IndexError:
+                raise ParseError("unexpected end of stream") from None
+            except ValueError:
+                raise ParseError(f"unknown section type: 0x{stream[0]:02x}") from None
+            else:
+                stream = stream[1:]
+
+            match section_type:
+                case SectionType.EXTENSION:
+                    try:
+                        extension_type = ExtensionType(stream[0])
+                    except IndexError:
+                        raise ParseError("unexpected end of stream") from None
+                    except ValueError:
+                        raise ParseError(f"unknown extension type: 0x{stream[0]:02x}") from None
+                    else:
+                        stream = stream[1:]
+
+                    match extension_type:
+                        case ExtensionType.APPLICATION:
+                            stream, application_extension = ApplicationExtension.decode(stream)
+                            sections.append(application_extension)
+                        case ExtensionType.GRAPHIC_CONTROL:
+                            stream, graphic_control_extension = GraphicControlExtension.decode(stream)
+                case SectionType.IMAGE:
+                    stream, image = Image.decode(stream, graphic_control_extension)
+                    sections.append(image)
+                    graphic_control_extension = None
+                case SectionType.TRAILER:
+                    break
+
+        return stream, cls(signature, version, screen, sections)
+
+    def encode(self):
+        result = self.signature + self.version
+        result += self.screen.encode()
+        result += b"".join(map(lambda x: x.encode(), self.sections))
+        result += bytes([SectionType.TRAILER.value])
+
+        return result
