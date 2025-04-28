@@ -88,11 +88,8 @@ class ColorTable(MutableSequence[Color], Serializable):
     data: list[Color]
     is_sorted: bool
 
-    # transparent color index for local color tables
-    background_color_index: Optional[int]
-
     @classmethod
-    def decode(cls, stream: bytes, size: int, is_sorted: bool, background_color_index: Optional[int]):
+    def decode(cls, stream: bytes, size: int, is_sorted: bool):
         if size not in range(1, cls.MAX_SIZE + 1):
             raise ParseError("invalid color table size")
 
@@ -101,7 +98,7 @@ class ColorTable(MutableSequence[Color], Serializable):
             stream, color = Color.decode(stream)
             data.append(color)
 
-        return stream, cls(data, is_sorted, background_color_index)
+        return stream, cls(data, is_sorted)
 
     def encode(self):
         if len(self) == 0:
@@ -129,8 +126,6 @@ class ColorTable(MutableSequence[Color], Serializable):
             raise ValueError("color table too big")
 
         self.data.insert(i, color)
-        if self.background_color_index is not None and i < self.background_color_index:
-            self.background_color_index += 1
 
 
 @dataclass
@@ -139,6 +134,7 @@ class Screen(Serializable):
     height: int
     color_table: Optional[ColorTable]
     color_resolution: int
+    background_color_index: int
     pixel_aspect_ratio: int
 
     @classmethod
@@ -154,20 +150,18 @@ class Screen(Serializable):
 
         color_table = None
         if has_color_table:
-            stream, color_table = ColorTable.decode(stream, color_table_size, color_table_is_sorted, background_color_index)
+            stream, color_table = ColorTable.decode(stream, color_table_size, color_table_is_sorted)
 
-        return stream, Screen(width, height, color_table, color_resolution, pixel_aspect_ratio)
+        return stream, Screen(width, height, color_table, color_resolution, background_color_index, pixel_aspect_ratio)
 
     def encode(self):
         packed_fields = self.color_resolution << 4
-        background_color_index = 0
         if self.color_table is not None:
             packed_fields |=                                              1 << 7  # has color table
             packed_fields |=                     self.color_table.is_sorted << 3
             packed_fields |= ((len(self.color_table) - 1).bit_length() - 1) << 0  # color table size
-            background_color_index = self.color_table.background_color_index or 0
 
-        result = pack("<HHBBB", self.width, self.height, packed_fields, background_color_index, self.pixel_aspect_ratio)
+        result = pack("<HHBBB", self.width, self.height, packed_fields, self.background_color_index, self.pixel_aspect_ratio)
         if self.color_table is not None:
             result += self.color_table.encode()
 
@@ -301,12 +295,7 @@ class Image(Section):
 
         color_table = None
         if has_color_table:
-            transparent_color_index = None
-            if graphic_control_extension is not None:
-                transparent_color_index = graphic_control_extension.transparent_color_index
-
-            stream, color_table = ColorTable.decode(stream, color_table_size, color_table_is_sorted, transparent_color_index)
-
+            stream, color_table = ColorTable.decode(stream, color_table_size, color_table_is_sorted)
 
         minimum_code_size = stream[0]
         stream = stream[1:]
