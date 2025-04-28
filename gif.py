@@ -4,11 +4,13 @@
 
 from __future__ import annotations
 
+import lzw
+
 from abc import ABC, abstractmethod
 from collections.abc import MutableSequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import wraps
-from itertools import chain, repeat
+from itertools import batched, chain, repeat
 from struct import pack, unpack
 from enum import Enum
 
@@ -68,6 +70,8 @@ class Color(Serializable):
     red: int
     green: int
     blue: int
+
+    is_transparent: bool=False
 
     @classmethod
     @Serializable.stream_length_at_least(3)
@@ -279,6 +283,18 @@ class Image(Section):
     is_interlaced: bool
     minimum_code_size: int
     data: Block
+
+    def get_pixels(self, global_color_table: Optional[ColorTable]=None) -> list[list[Color]]:
+        color_table = global_color_table if self.color_table is None else self.color_table
+        data = lzw.decode(self.minimum_code_size, b"".join(self.data))
+
+        return [[replace(
+                     color_table[i],
+                     is_transparent
+                         =   self.graphic_control_extension is not None
+                         and i == self.graphic_control_extension.transparent_color_index)
+                 for i in row_indices]
+                 for row_indices in batched(data, self.width)]
 
     @classmethod
     @Serializable.stream_length_at_least(9)
