@@ -352,14 +352,14 @@ class GIF(Serializable):
     @classmethod
     @Serializable.stream_length_at_least(6)
     def decode(cls, stream: bytes):
-        if stream[:3] != b"GIF":
-            raise ParseError(f"invalid signature: {stream[:3]!r}")
-
-        if stream[3:6] not in (b"87a", b"89a"):
-            raise ParseError(f"invalid version: {stream[3:6]!r}")
-
         signature, version = stream[:3], stream[3:6]
         stream = stream[6:]
+
+        if signature != b"GIF":
+            raise ParseError(f"invalid signature: {signature!r}")
+
+        if version not in (b"87a", b"89a"):
+            raise ParseError(f"invalid version: {version!r}")
 
         stream, screen = Screen.decode(stream)
 
