@@ -2,31 +2,11 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-from collections.abc import Iterable, Sequence, Generator
+from collections.abc import Iterable, Generator
 from itertools import chain, islice
 from enum import Enum, auto
 
 MAX_CODE_SIZE = 12
-
-
-class Bitstream(Sequence[bool]):
-    def __init__(self, data: bytes):
-        self.data = data
-
-    def __getitem__(self, i):
-        byte, offset = divmod(i, 8)
-        return (self.data[byte] >> offset) & 1
-
-    def __len__(self):
-        return len(self.data) * 8
-
-
-def bits_to_int(bits: Iterable[bool]) -> int:
-    result = 0
-    for bit in reversed(list(bits)):
-        result = (result << 1) | bit
-
-    return result
 
 
 class SpecialEntry(Enum):
@@ -37,19 +17,25 @@ class SpecialEntry(Enum):
 type Entry = list[int] | SpecialEntry
 
 
+def bits_to_int(bits: Iterable[bool]) -> int:
+    result = 0
+    for bit in reversed(list(bits)):
+        result = 2*result + bit
+
+    return result
+
+
 def create_dictionary(minimum_code_size: int) -> list[Entry]:
     return [[x] for x in range(2**minimum_code_size)] + [SpecialEntry.CLEAR, SpecialEntry.END]
 
 
-def decode(minimum_code_size: int, data: bytes) -> Generator[int, None, None]:
-    stream = iter(Bitstream(data))
-
+def decode(minimum_code_size: int, data: Iterable[bool]) -> Generator[int, None, None]:
     dictionary = create_dictionary(minimum_code_size)
 
     prev = None
     while True:
         code_size = len(dictionary).bit_length()
-        code_index = bits_to_int(islice(stream, code_size))
+        code_index = bits_to_int(islice(data, code_size))
 
         if code_index < len(dictionary):
             code = dictionary[code_index]

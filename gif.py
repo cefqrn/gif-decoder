@@ -272,6 +272,10 @@ class ApplicationExtension(Section):
              + encode_block([self.identifier + self.authentication_code] + self.data)
 
 
+def byte_to_bits(byte: int) -> list[bool]:
+    return [(byte >> i) & 1 for i in range(8)]
+
+
 @dataclass
 class Image(Section):
     graphic_control_extension: Optional[GraphicControlExtension]
@@ -286,7 +290,9 @@ class Image(Section):
 
     def get_pixels(self, global_color_table: Optional[ColorTable]=None) -> list[list[Color]]:
         color_table = global_color_table if self.color_table is None else self.color_table
-        data = lzw.decode(self.minimum_code_size, b"".join(self.data))
+        data = lzw.decode(
+            self.minimum_code_size,
+            chain.from_iterable(map(byte_to_bits, chain.from_iterable(self.data))))
 
         return [[replace(
                      color_table[i],
