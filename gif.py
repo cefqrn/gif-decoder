@@ -327,13 +327,26 @@ class Image(Section):
         color_table = global_color_table if self.color_table is None else self.color_table
         data = lzw.decode(self.minimum_code_size, chain.from_iterable(self.data))
 
-        return [[replace(
+        rows = [[replace(
                      color_table[i],
                      is_transparent
                          =   self.graphic_control_extension is not None
                          and i == self.graphic_control_extension.transparent_color_index)
                  for i in row_indices]
                  for row_indices in batched(data, self.width)]
+
+        if not self.is_interlaced:
+            return rows
+
+        result = [None] * len(rows)
+
+        end = 0
+        for initial, stride in (0, 8), (4, 8), (2, 4), (1, 2):
+            start, end = end, end + len(rows[initial::stride])
+            result[initial::stride] = rows[start:end]
+
+        return result
+
 
     @classmethod
     @Serializable.stream_length_at_least(9)
