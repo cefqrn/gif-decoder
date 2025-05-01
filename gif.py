@@ -9,7 +9,7 @@ import lzw
 from abc import ABC, abstractmethod
 from collections.abc import MutableSequence
 from dataclasses import dataclass, replace
-from functools import wraps
+from functools import partial, wraps
 from itertools import batched, chain, repeat
 from struct import pack, unpack
 from enum import Enum
@@ -31,7 +31,7 @@ class SectionType(Enum):
 class ExtensionType(Enum):
     # PLAIN_TEXT      = 0x01
     GRAPHIC_CONTROL = 0xF9
-    # COMMENT         = 0xFE
+    COMMENT         = 0xFE
     APPLICATION     = 0xFF
 
 
@@ -273,6 +273,21 @@ class ApplicationExtension(Section):
 
 
 @dataclass
+class CommentExtension(Section):
+    data: list[str]
+
+    @classmethod
+    def decode(cls, stream: bytes):
+        stream, block = decode_block(stream)
+
+        return stream, cls(list(map(partial(bytes.decode, encoding="ASCII"), block)))
+
+    def encode(self):
+        return bytes([SectionType.EXTENSION.value, ExtensionType.COMMENT.value]) \
+             + encode_block(map(partial(str.encode, encoding="ASCII"), self.data))
+
+
+@dataclass
 class Image(Section):
     graphic_control_extension: Optional[GraphicControlExtension]
     left: int
@@ -390,6 +405,9 @@ class GIF(Serializable):
                         case ExtensionType.APPLICATION:
                             stream, application_extension = ApplicationExtension.decode(stream)
                             sections.append(application_extension)
+                        case ExtensionType.COMMENT:
+                            stream, comment_extension = CommentExtension.decode(stream)
+                            sections.append(comment_extension)
                         case ExtensionType.GRAPHIC_CONTROL:
                             stream, graphic_control_extension = GraphicControlExtension.decode(stream)
                 case SectionType.IMAGE:
