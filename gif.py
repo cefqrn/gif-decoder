@@ -29,7 +29,7 @@ class SectionType(Enum):
 
 
 class ExtensionType(Enum):
-    # PLAIN_TEXT      = 0x01
+    PLAIN_TEXT      = 0x01
     GRAPHIC_CONTROL = 0xF9
     COMMENT         = 0xFE
     APPLICATION     = 0xFF
@@ -288,6 +288,30 @@ class CommentExtension(Section):
 
 
 @dataclass
+class PlainTextExtension(Section):
+    top: int
+    left: int
+    width: int
+    height: int
+    cell_width: int
+    cell_height: int
+    foreground_color_index: int
+    background_color_index: int
+    data: Block
+
+    @classmethod
+    def decode(cls, stream: bytes):
+        stream, block = decode_block(stream)
+        top, left, width, height, cell_width, cell_height, foreground_color_index, background_color_index = unpack("<HHHHBBBB", block[0])
+
+        return stream, cls(top, left, width, height, cell_width, cell_height, foreground_color_index, background_color_index, block[1:])
+
+    def encode(self):
+        return bytes([SectionType.EXTENSION.value, ExtensionType.PLAIN_TEXT.value]) \
+             + encode_block([pack("<HHHHBBBB", self.top, self.left, self.width, self.height, self.cell_width, self.cell_height, self.foreground_color_index, self.background_color_index)] + self.data)
+
+
+@dataclass
 class Image(Section):
     graphic_control_extension: Optional[GraphicControlExtension]
     left: int
@@ -408,6 +432,9 @@ class GIF(Serializable):
                         case ExtensionType.COMMENT:
                             stream, comment_extension = CommentExtension.decode(stream)
                             sections.append(comment_extension)
+                        case ExtensionType.PLAIN_TEXT:
+                            stream, plain_text_extension = PlainTextExtension.decode(stream)
+                            sections.append(plain_text_extension)
                         case ExtensionType.GRAPHIC_CONTROL:
                             stream, graphic_control_extension = GraphicControlExtension.decode(stream)
                 case SectionType.IMAGE:
