@@ -35,8 +35,6 @@ class ExtensionType(IntEnum):
 
 @dataclass
 class Color(Serializable):
-    DEFAULT: ClassVar[Color]
-
     red: int
     green: int
     blue: int
@@ -52,12 +50,10 @@ class Color(Serializable):
         return bytes([self.red, self.green, self.blue])
 
 
-Color.DEFAULT = Color(0, 0, 0)
-
-
 @dataclass
 class ColorTable(MutableSequence[Color], Serializable):
     MAX_SIZE: ClassVar[int] = 256
+    PADDING_COLOR: ClassVar[Color] = Color(0, 0, 0)
 
     data: list[Color]
     is_sorted: bool
@@ -81,7 +77,7 @@ class ColorTable(MutableSequence[Color], Serializable):
         length_bit_count = (len(self) - 1).bit_length()
         padding_length = 2**length_bit_count - len(self)
 
-        return b"".join(map(Color.encode, chain(self.data, repeat(Color.DEFAULT, padding_length))))
+        return b"".join(map(Color.encode, chain(self.data, repeat(self.PADDING_COLOR, padding_length))))
 
     def __len__(self):
         return len(self.data)
