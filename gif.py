@@ -212,17 +212,31 @@ class Extension(Section):
         extension_type = stream[0]
         stream = stream[1:]
 
-        extension_class = {
-            ExtensionType.PLAIN_TEXT:      PlainTextExtension,
-            ExtensionType.GRAPHIC_CONTROL: GraphicControlExtension,
-            ExtensionType.COMMENT:         CommentExtension,
-            ExtensionType.APPLICATION:     ApplicationExtension
-        }.get(extension_type)
+        try:
+            extension_class = {
+                ExtensionType.PLAIN_TEXT:      PlainTextExtension,
+                ExtensionType.GRAPHIC_CONTROL: GraphicControlExtension,
+                ExtensionType.COMMENT:         CommentExtension,
+                ExtensionType.APPLICATION:     ApplicationExtension
+            }[extension_type]
+        except KeyError:
+            return UnknownExtension.decode(stream, extension_type)
+        else:
+            return extension_class.decode(stream)
 
-        if extension_class is None:
-            raise ParseError(f"unknown extension type: 0x{stream[0]:02X}")
 
-        return extension_class.decode(stream)
+@dataclass
+class UnknownExtension(Extension):
+    extension_type: int
+    data: Block
+
+    @classmethod
+    def decode(cls, stream: bytes, extension_type: int):
+        stream, data = decode_block(stream)
+        return stream, cls(extension_type, data)
+
+    def encode(self):
+        return bytes([SectionType.EXTENSION, self.extension_type]) + encode_block(self.data)
 
 
 @dataclass
