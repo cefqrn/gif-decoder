@@ -342,13 +342,14 @@ class Image(Block):
         if color_table is None:
             raise ValueError("missing active color table")
 
-        rows = [[replace(
-                     color_table[i],
+        colors = [replace(
+                     color,
                      is_transparent
                          =   self.graphic_control_extension is not None
                          and i == self.graphic_control_extension.transparent_color_index)
-                 for i in row_indices]
-                 for row_indices in batched(data, self.width)]
+                  for i, color in enumerate(color_table)]
+
+        rows = [[colors[i] for i in row_indices] for row_indices in batched(data, self.width)]
 
         if not self.is_interlaced:
             return rows
