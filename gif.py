@@ -33,7 +33,7 @@ class ExtensionType(IntEnum):
     APPLICATION     = 0xFF
 
 
-@dataclass
+@dataclass(frozen=True)
 class Color(Serializable):
     red: int
     green: int
@@ -50,7 +50,7 @@ class Color(Serializable):
         return bytes([self.red, self.green, self.blue])
 
 
-@dataclass
+@dataclass(frozen=True)
 class ColorTable(MutableSequence[Color], Serializable):
     MAX_SIZE: ClassVar[int] = 256
     PADDING_COLOR: ClassVar[Color] = Color(0, 0, 0)
@@ -98,7 +98,7 @@ class ColorTable(MutableSequence[Color], Serializable):
         self.data.insert(i, color)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Screen(Serializable):
     width: int
     height: int
@@ -191,7 +191,7 @@ class Block(Serializable):
         raise ParseError(f"unknown section type: 0x{block_type:02X}")
 
 
-@dataclass
+@dataclass(frozen=True)
 class Trailer(Block):
     @classmethod
     def decode(cls, stream):
@@ -221,7 +221,7 @@ class Extension(Block):
             return extension_class.decode(stream)
 
 
-@dataclass
+@dataclass(frozen=True)
 class UnknownExtension(Extension):
     extension_type: int
     data: DataBlock
@@ -235,7 +235,7 @@ class UnknownExtension(Extension):
         return bytes([BlockType.EXTENSION, self.extension_type]) + encode_data_block(self.data)
 
 
-@dataclass
+@dataclass(frozen=True)
 class GraphicControlExtension(Extension):
     disposal_method: int
     waits_for_user_input: int
@@ -271,7 +271,7 @@ class GraphicControlExtension(Extension):
              + encode_data_block([pack("<BHB", packed_fields, self.delay_time, self.transparent_color_index or 0)])
 
 
-@dataclass
+@dataclass(frozen=True)
 class ApplicationExtension(Extension):
     identifier: bytes
     authentication_code: bytes
@@ -296,7 +296,7 @@ class ApplicationExtension(Extension):
              + encode_data_block([self.identifier + self.authentication_code] + self.data)
 
 
-@dataclass
+@dataclass(frozen=True)
 class CommentExtension(Extension):
     data: list[str]
 
@@ -311,7 +311,7 @@ class CommentExtension(Extension):
              + encode_data_block(list(map(partial(str.encode, encoding="ASCII"), self.data)))
 
 
-@dataclass
+@dataclass(frozen=True)
 class PlainTextExtension(Extension):
     top: int
     left: int
@@ -335,7 +335,7 @@ class PlainTextExtension(Extension):
              + encode_data_block([pack("<HHHHBBBB", self.top, self.left, self.width, self.height, self.cell_width, self.cell_height, self.foreground_color_index, self.background_color_index)] + self.data)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Image(Block):
     graphic_control_extension: Optional[GraphicControlExtension]
     left: int
@@ -421,7 +421,7 @@ class Image(Block):
         return result
 
 
-@dataclass
+@dataclass(frozen=True)
 class GIF(Serializable):
     signature: bytes
     version: bytes
