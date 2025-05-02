@@ -271,7 +271,7 @@ class GraphicControlExtension(Extension):
         if self.transparent_color_index is not None:
             packed_fields |= 1 << 0  # has transparent color
 
-        return bytes([BlockType.EXTENSION.value, ExtensionType.GRAPHIC_CONTROL.value]) \
+        return bytes([BlockType.EXTENSION, ExtensionType.GRAPHIC_CONTROL]) \
              + encode_data_block([pack("<BHB", packed_fields, self.delay_time, self.transparent_color_index or 0)])
 
 
@@ -296,7 +296,7 @@ class ApplicationExtension(Extension):
         return stream, cls(identifier, authentication_code, block[1:])
 
     def encode(self):
-        return bytes([BlockType.EXTENSION.value, ExtensionType.APPLICATION.value]) \
+        return bytes([BlockType.EXTENSION, ExtensionType.APPLICATION]) \
              + encode_data_block([self.identifier + self.authentication_code] + self.data)
 
 
@@ -311,7 +311,7 @@ class CommentExtension(Extension):
         return stream, cls(list(map(partial(bytes.decode, encoding="ASCII"), block)))
 
     def encode(self):
-        return bytes([BlockType.EXTENSION.value, ExtensionType.COMMENT.value]) \
+        return bytes([BlockType.EXTENSION, ExtensionType.COMMENT]) \
              + encode_data_block(map(partial(str.encode, encoding="ASCII"), self.data))
 
 
@@ -335,7 +335,7 @@ class PlainTextExtension(Extension):
         return stream, cls(top, left, width, height, cell_width, cell_height, foreground_color_index, background_color_index, block[1:])
 
     def encode(self):
-        return bytes([BlockType.EXTENSION.value, ExtensionType.PLAIN_TEXT.value]) \
+        return bytes([BlockType.EXTENSION, ExtensionType.PLAIN_TEXT]) \
              + encode_data_block([pack("<HHHHBBBB", self.top, self.left, self.width, self.height, self.cell_width, self.cell_height, self.foreground_color_index, self.background_color_index)] + self.data)
 
 
@@ -412,7 +412,7 @@ class Image(Block):
         if self.graphic_control_extension is not None:
             result += self.graphic_control_extension.encode()
 
-        result += bytes([BlockType.IMAGE.value]) + pack("<HHHHB", self.left, self.top, self.width, self.height, packed_fields)
+        result += bytes([BlockType.IMAGE]) + pack("<HHHHB", self.left, self.top, self.width, self.height, packed_fields)
 
         if self.color_table is not None:
             result += self.color_table.encode()
@@ -464,6 +464,6 @@ class GIF(Serializable):
         result = self.signature + self.version
         result += self.screen.encode()
         result += b"".join(map(lambda x: x.encode(), self.sections))
-        result += bytes([BlockType.TRAILER.value])
+        result += bytes([BlockType.TRAILER])
 
         return result
