@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from functools import wraps
 from typing import Self
 
-type Parsed[T] = tuple[bytes, T]
+type Parsed[T] = tuple[memoryview, T]
 
 
 class ParseError(ValueError): ...
@@ -11,7 +11,7 @@ class ParseError(ValueError): ...
 class Serializable(ABC):
     @classmethod
     @abstractmethod
-    def decode(cls, stream: bytes, *args, **kwargs) -> Parsed[Self]:
+    def decode(cls, stream: memoryview, *args, **kwargs) -> Parsed[Self]:
         ...
 
     @abstractmethod
