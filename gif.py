@@ -178,17 +178,17 @@ class Block(Serializable):
     @classmethod
     @stream_length_at_least(1)
     def decode(cls, stream: bytes, graphic_control_extension: Optional[GraphicControlExtension]):
-        section_type = stream[0]
+        block_type = stream[0]
         stream = stream[1:]
 
-        if section_type == BlockType.IMAGE:
+        if block_type == BlockType.IMAGE:
             return Image.decode(stream, graphic_control_extension)
-        if section_type == BlockType.EXTENSION:
+        if block_type == BlockType.EXTENSION:
             return Extension.decode(stream)
-        if section_type == BlockType.TRAILER:
+        if block_type == BlockType.TRAILER:
             return Trailer.decode(stream)
 
-        raise ParseError(f"unknown section type: 0x{section_type:02X}")
+        raise ParseError(f"unknown section type: 0x{block_type:02X}")
 
 
 @dataclass
@@ -426,7 +426,7 @@ class GIF(Serializable):
     signature: bytes
     version: bytes
     screen: Screen
-    sections: list[Block]
+    blocks: list[Block]  # blocks after the screen descriptor, not including the trailer
 
     @classmethod
     @stream_length_at_least(6)
@@ -443,26 +443,26 @@ class GIF(Serializable):
         stream, screen = Screen.decode(stream)
 
         graphic_control_extension: Optional[GraphicControlExtension] = None
-        sections: list[Block] = []
+        blocks: list[Block] = []
         while True:
-            stream, section = Block.decode(stream, graphic_control_extension)
-            match section:
+            stream, block = Block.decode(stream, graphic_control_extension)
+            match block:
                 case GraphicControlExtension():
-                    graphic_control_extension = section
+                    graphic_control_extension = block
                 case Image():
                     graphic_control_extension = None
-                    sections.append(section)
+                    blocks.append(block)
                 case Trailer():
                     break
                 case _:
-                    sections.append(section)
+                    blocks.append(block)
 
-        return stream, cls(signature, version, screen, sections)
+        return stream, cls(signature, version, screen, blocks)
 
     def encode(self):
         result = self.signature + self.version
         result += self.screen.encode()
-        result += b"".join(map(lambda x: x.encode(), self.sections))
+        result += b"".join(map(lambda x: x.encode(), self.blocks))
         result += bytes([BlockType.TRAILER])
 
         return result
