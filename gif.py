@@ -4,19 +4,17 @@
 
 from __future__ import annotations
 
+from serializable import ParseError, Parsed, Serializable, stream_length_at_least
 import lzw
 
-from abc import ABC, abstractmethod
 from collections.abc import MutableSequence
 from dataclasses import dataclass, replace
-from functools import partial, wraps
+from functools import partial
 from itertools import batched, chain, repeat
 from struct import pack, unpack
 from enum import Enum
 
-from typing import ClassVar, Optional, Self
-
-type Parsed[T] = tuple[bytes, T]
+from typing import ClassVar, Optional
 
 type SubBlock = bytes
 type Block = list[SubBlock]
@@ -35,34 +33,6 @@ class ExtensionType(Enum):
     APPLICATION     = 0xFF
 
 
-class ParseError(ValueError): ...
-
-
-class Serializable(ABC):
-    @classmethod
-    @abstractmethod
-    def decode(cls, stream: bytes, *args, **kwargs) -> Parsed[Self]:
-        ...
-
-    @abstractmethod
-    def encode(self) -> bytes:
-        ...
-
-    @staticmethod
-    def stream_length_at_least(length):
-        def wrapper(f):
-            @wraps(f)
-            def inner(cls, stream, *args, **kwargs):
-                if len(stream) < length:
-                    raise ParseError("unexpected end of stream")
-
-                return f(cls, stream, *args, **kwargs)
-
-            return inner
-
-        return wrapper
-
-
 @dataclass
 class Color(Serializable):
     DEFAULT: ClassVar[Color]
@@ -74,7 +44,7 @@ class Color(Serializable):
     is_transparent: bool=False
 
     @classmethod
-    @Serializable.stream_length_at_least(3)
+    @stream_length_at_least(3)
     def decode(cls, stream):
         return stream[3:], cls(*stream[:3])
 
@@ -142,7 +112,7 @@ class Screen(Serializable):
     pixel_aspect_ratio: int
 
     @classmethod
-    @Serializable.stream_length_at_least(7)
+    @stream_length_at_least(7)
     def decode(cls, stream: bytes):
         width, height, packed_fields, background_color_index, pixel_aspect_ratio = unpack("<HHBBB", stream[:7])
         stream = stream[7:]
@@ -349,7 +319,7 @@ class Image(Section):
 
 
     @classmethod
-    @Serializable.stream_length_at_least(9)
+    @stream_length_at_least(9)
     def decode(cls, stream: bytes, graphic_control_extension: GraphicControlExtension):
         left, top, width, height, packed_fields = unpack("<HHHHB", stream[:9])
         stream = stream[9:]
@@ -402,7 +372,7 @@ class GIF(Serializable):
     sections: list[Section]
 
     @classmethod
-    @Serializable.stream_length_at_least(6)
+    @stream_length_at_least(6)
     def decode(cls, stream: bytes):
         signature, version = stream[:3], stream[3:6]
         stream = stream[6:]
