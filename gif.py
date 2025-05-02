@@ -17,10 +17,10 @@ from enum import IntEnum
 from typing import ClassVar, Optional
 
 type SubBlock = bytes
-type Block = list[SubBlock]
+type DataBlock = list[SubBlock]
 
 
-class SectionType(IntEnum):
+class BlockType(IntEnum):
     EXTENSION = 0x21
     IMAGE     = 0x2C
     TRAILER   = 0x3B
@@ -162,7 +162,7 @@ def encode_subblock(subblock: SubBlock) -> bytes:
 TERMINATOR_SUBBLOCK = b""
 
 
-def decode_block(stream: bytes) -> Parsed[Block]:
+def decode_data_block(stream: bytes) -> Parsed[DataBlock]:
     block = []
     while True:
         stream, subblock = decode_subblock(stream)
@@ -174,29 +174,29 @@ def decode_block(stream: bytes) -> Parsed[Block]:
     return stream, block
 
 
-def encode_block(block: Block) -> bytes:
+def encode_data_block(block: DataBlock) -> bytes:
     return b"".join(map(encode_subblock, chain(block, [TERMINATOR_SUBBLOCK])))
 
 
-class Section(Serializable):
+class Block(Serializable):
     @classmethod
     @stream_length_at_least(1)
     def decode(cls, stream: bytes, graphic_control_extension: Optional[GraphicControlExtension]):
         section_type = stream[0]
         stream = stream[1:]
 
-        if section_type == SectionType.IMAGE:
+        if section_type == BlockType.IMAGE:
             return Image.decode(stream, graphic_control_extension)
-        if section_type == SectionType.EXTENSION:
+        if section_type == BlockType.EXTENSION:
             return Extension.decode(stream)
-        if section_type == SectionType.TRAILER:
+        if section_type == BlockType.TRAILER:
             return Trailer.decode(stream)
 
         raise ParseError(f"unknown section type: 0x{section_type:02X}")
 
 
 @dataclass
-class Trailer(Section):
+class Trailer(Block):
     @classmethod
     def decode(cls, stream: bytes):
         return stream, cls()
@@ -205,7 +205,7 @@ class Trailer(Section):
         return b""
 
 
-class Extension(Section):
+class Extension(Block):
     @classmethod
     @stream_length_at_least(1)
     def decode(cls, stream: bytes):
@@ -228,15 +228,15 @@ class Extension(Section):
 @dataclass
 class UnknownExtension(Extension):
     extension_type: int
-    data: Block
+    data: DataBlock
 
     @classmethod
     def decode(cls, stream: bytes, extension_type: int):
-        stream, data = decode_block(stream)
+        stream, data = decode_data_block(stream)
         return stream, cls(extension_type, data)
 
     def encode(self):
-        return bytes([SectionType.EXTENSION, self.extension_type]) + encode_block(self.data)
+        return bytes([BlockType.EXTENSION, self.extension_type]) + encode_data_block(self.data)
 
 
 @dataclass
@@ -248,7 +248,7 @@ class GraphicControlExtension(Extension):
 
     @classmethod
     def decode(cls, stream: bytes):
-        stream, block = decode_block(stream)
+        stream, block = decode_data_block(stream)
         if len(block) != 1:
             raise ParseError("too many blocks in graphic control extension")
 
@@ -271,19 +271,19 @@ class GraphicControlExtension(Extension):
         if self.transparent_color_index is not None:
             packed_fields |= 1 << 0  # has transparent color
 
-        return bytes([SectionType.EXTENSION.value, ExtensionType.GRAPHIC_CONTROL.value]) \
-             + encode_block([pack("<BHB", packed_fields, self.delay_time, self.transparent_color_index or 0)])
+        return bytes([BlockType.EXTENSION.value, ExtensionType.GRAPHIC_CONTROL.value]) \
+             + encode_data_block([pack("<BHB", packed_fields, self.delay_time, self.transparent_color_index or 0)])
 
 
 @dataclass
 class ApplicationExtension(Extension):
     identifier: bytes
     authentication_code: bytes
-    data: Block
+    data: DataBlock
 
     @classmethod
     def decode(cls, stream: bytes):
-        stream, block = decode_block(stream)
+        stream, block = decode_data_block(stream)
         if len(block) < 1:
             raise ParseError("empty application extension")
 
@@ -296,8 +296,8 @@ class ApplicationExtension(Extension):
         return stream, cls(identifier, authentication_code, block[1:])
 
     def encode(self):
-        return bytes([SectionType.EXTENSION.value, ExtensionType.APPLICATION.value]) \
-             + encode_block([self.identifier + self.authentication_code] + self.data)
+        return bytes([BlockType.EXTENSION.value, ExtensionType.APPLICATION.value]) \
+             + encode_data_block([self.identifier + self.authentication_code] + self.data)
 
 
 @dataclass
@@ -306,13 +306,13 @@ class CommentExtension(Extension):
 
     @classmethod
     def decode(cls, stream: bytes):
-        stream, block = decode_block(stream)
+        stream, block = decode_data_block(stream)
 
         return stream, cls(list(map(partial(bytes.decode, encoding="ASCII"), block)))
 
     def encode(self):
-        return bytes([SectionType.EXTENSION.value, ExtensionType.COMMENT.value]) \
-             + encode_block(map(partial(str.encode, encoding="ASCII"), self.data))
+        return bytes([BlockType.EXTENSION.value, ExtensionType.COMMENT.value]) \
+             + encode_data_block(map(partial(str.encode, encoding="ASCII"), self.data))
 
 
 @dataclass
@@ -325,22 +325,22 @@ class PlainTextExtension(Extension):
     cell_height: int
     foreground_color_index: int
     background_color_index: int
-    data: Block
+    data: DataBlock
 
     @classmethod
     def decode(cls, stream: bytes):
-        stream, block = decode_block(stream)
+        stream, block = decode_data_block(stream)
         top, left, width, height, cell_width, cell_height, foreground_color_index, background_color_index = unpack("<HHHHBBBB", block[0])
 
         return stream, cls(top, left, width, height, cell_width, cell_height, foreground_color_index, background_color_index, block[1:])
 
     def encode(self):
-        return bytes([SectionType.EXTENSION.value, ExtensionType.PLAIN_TEXT.value]) \
-             + encode_block([pack("<HHHHBBBB", self.top, self.left, self.width, self.height, self.cell_width, self.cell_height, self.foreground_color_index, self.background_color_index)] + self.data)
+        return bytes([BlockType.EXTENSION.value, ExtensionType.PLAIN_TEXT.value]) \
+             + encode_data_block([pack("<HHHHBBBB", self.top, self.left, self.width, self.height, self.cell_width, self.cell_height, self.foreground_color_index, self.background_color_index)] + self.data)
 
 
 @dataclass
-class Image(Section):
+class Image(Block):
     graphic_control_extension: Optional[GraphicControlExtension]
     left: int
     top: int
@@ -349,7 +349,7 @@ class Image(Section):
     color_table: Optional[ColorTable]
     is_interlaced: bool
     minimum_code_size: int
-    data: Block
+    data: DataBlock
 
     def get_pixels(self, global_color_table: Optional[ColorTable]=None) -> list[list[Color]]:
         color_table = global_color_table if self.color_table is None else self.color_table
@@ -396,7 +396,7 @@ class Image(Section):
         minimum_code_size = stream[0]
         stream = stream[1:]
 
-        stream, data = decode_block(stream)
+        stream, data = decode_data_block(stream)
 
         return stream, cls(graphic_control_extension, left, top, width, height, color_table, is_interlaced, minimum_code_size, data)
 
@@ -412,12 +412,12 @@ class Image(Section):
         if self.graphic_control_extension is not None:
             result += self.graphic_control_extension.encode()
 
-        result += bytes([SectionType.IMAGE.value]) + pack("<HHHHB", self.left, self.top, self.width, self.height, packed_fields)
+        result += bytes([BlockType.IMAGE.value]) + pack("<HHHHB", self.left, self.top, self.width, self.height, packed_fields)
 
         if self.color_table is not None:
             result += self.color_table.encode()
 
-        result += bytes([self.minimum_code_size]) + encode_block(self.data)
+        result += bytes([self.minimum_code_size]) + encode_data_block(self.data)
 
         return result
 
@@ -427,7 +427,7 @@ class GIF(Serializable):
     signature: bytes
     version: bytes
     screen: Screen
-    sections: list[Section]
+    sections: list[Block]
 
     @classmethod
     @stream_length_at_least(6)
@@ -444,9 +444,9 @@ class GIF(Serializable):
         stream, screen = Screen.decode(stream)
 
         graphic_control_extension: Optional[GraphicControlExtension] = None
-        sections: list[Section] = []
+        sections: list[Block] = []
         while True:
-            stream, section = Section.decode(stream, graphic_control_extension)
+            stream, section = Block.decode(stream, graphic_control_extension)
             match section:
                 case GraphicControlExtension():
                     graphic_control_extension = section
@@ -464,6 +464,6 @@ class GIF(Serializable):
         result = self.signature + self.version
         result += self.screen.encode()
         result += b"".join(map(lambda x: x.encode(), self.sections))
-        result += bytes([SectionType.TRAILER.value])
+        result += bytes([BlockType.TRAILER.value])
 
         return result
