@@ -7,7 +7,7 @@ from __future__ import annotations
 from serializable import ParseError, Parsed, Serializable, stream_length_at_least
 import lzw
 
-from collections.abc import MutableSequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from itertools import batched, chain, repeat
@@ -17,7 +17,7 @@ from enum import IntEnum
 from typing import ClassVar, Optional
 
 type SubBlock = bytes
-type DataBlock = list[SubBlock]
+type DataBlock = tuple[SubBlock, ...]
 
 
 class BlockType(IntEnum):
@@ -51,11 +51,11 @@ class Color(Serializable):
 
 
 @dataclass(frozen=True)
-class ColorTable(MutableSequence[Color], Serializable):
+class ColorTable(Sequence[Color], Serializable):
     MAX_SIZE: ClassVar[int] = 256
     PADDING_COLOR: ClassVar[Color] = Color(0, 0, 0)
 
-    data: list[Color]
+    data: tuple[Color, ...]
     is_sorted: bool
 
     @classmethod
@@ -68,7 +68,7 @@ class ColorTable(MutableSequence[Color], Serializable):
             stream, color = Color.decode(stream)
             data.append(color)
 
-        return stream, cls(data, is_sorted)
+        return stream, cls(tuple(data), is_sorted)
 
     def encode(self):
         if len(self) == 0:
@@ -84,18 +84,6 @@ class ColorTable(MutableSequence[Color], Serializable):
 
     def __getitem__(self, i):
         return self.data[i]
-
-    def __setitem__(self, i, color):
-        self.data[i] = color
-
-    def __delitem__(self, i):
-        del self.data[i]
-
-    def insert(self, i, color):
-        if len(self.data) == ColorTable.MAX_SIZE:
-            raise ValueError("color table too big")
-
-        self.data.insert(i, color)
 
 
 @dataclass(frozen=True)
@@ -167,7 +155,7 @@ def decode_data_block(stream: memoryview) -> Parsed[DataBlock]:
 
         block.append(subblock)
 
-    return stream, block
+    return stream, tuple(block)
 
 
 def encode_data_block(block: DataBlock) -> bytes:
@@ -268,7 +256,7 @@ class GraphicControlExtension(Extension):
             packed_fields |= 1 << 0  # has transparent color
 
         return bytes([BlockType.EXTENSION, ExtensionType.GRAPHIC_CONTROL]) \
-             + encode_data_block([pack("<BHB", packed_fields, self.delay_time, self.transparent_color_index or 0)])
+             + encode_data_block((pack("<BHB", packed_fields, self.delay_time, self.transparent_color_index or 0),))
 
 
 @dataclass(frozen=True)
@@ -293,22 +281,22 @@ class ApplicationExtension(Extension):
 
     def encode(self):
         return bytes([BlockType.EXTENSION, ExtensionType.APPLICATION]) \
-             + encode_data_block([self.identifier + self.authentication_code] + self.data)
+             + encode_data_block((self.identifier + self.authentication_code, *self.data))
 
 
 @dataclass(frozen=True)
 class CommentExtension(Extension):
-    data: list[str]
+    data: tuple[str, ...]
 
     @classmethod
     def decode(cls, stream):
         stream, block = decode_data_block(stream)
 
-        return stream, cls(list(map(partial(bytes.decode, encoding="ASCII"), block)))
+        return stream, cls(tuple(map(partial(bytes.decode, encoding="ASCII"), block)))
 
     def encode(self):
         return bytes([BlockType.EXTENSION, ExtensionType.COMMENT]) \
-             + encode_data_block(list(map(partial(str.encode, encoding="ASCII"), self.data)))
+             + encode_data_block(tuple(map(partial(str.encode, encoding="ASCII"), self.data)))
 
 
 @dataclass(frozen=True)
@@ -332,7 +320,7 @@ class PlainTextExtension(Extension):
 
     def encode(self):
         return bytes([BlockType.EXTENSION, ExtensionType.PLAIN_TEXT]) \
-             + encode_data_block([pack("<HHHHBBBB", self.top, self.left, self.width, self.height, self.cell_width, self.cell_height, self.foreground_color_index, self.background_color_index)] + self.data)
+             + encode_data_block((pack("<HHHHBBBB", self.top, self.left, self.width, self.height, self.cell_width, self.cell_height, self.foreground_color_index, self.background_color_index), *self.data))
 
 
 @dataclass(frozen=True)
@@ -426,7 +414,7 @@ class GIF(Serializable):
     signature: bytes
     version: bytes
     screen: Screen
-    blocks: list[Block]  # blocks after the screen descriptor, not including the trailer
+    blocks: tuple[Block, ...]  # blocks after the screen descriptor, not including the trailer
 
     @classmethod
     @stream_length_at_least(6)
@@ -457,7 +445,7 @@ class GIF(Serializable):
                 case _:
                     blocks.append(block)
 
-        return stream, cls(signature, version, screen, blocks)
+        return stream, cls(signature, version, screen, tuple(blocks))
 
     def encode(self):
         result = self.signature + self.version
