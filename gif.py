@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from itertools import batched, chain, repeat
 from struct import pack, unpack
-from enum import Enum
+from enum import IntEnum
 
 from typing import ClassVar, Optional
 
@@ -20,13 +20,13 @@ type SubBlock = bytes
 type Block = list[SubBlock]
 
 
-class SectionType(Enum):
-    IMAGE     = 0x2C
+class SectionType(IntEnum):
     EXTENSION = 0x21
+    IMAGE     = 0x2C
     TRAILER   = 0x3B
 
 
-class ExtensionType(Enum):
+class ExtensionType(IntEnum):
     PLAIN_TEXT      = 0x01
     GRAPHIC_CONTROL = 0xF9
     COMMENT         = 0xFE
@@ -178,8 +178,55 @@ def encode_block(block: Block) -> bytes:
     return b"".join(map(encode_subblock, chain(block, [TERMINATOR_SUBBLOCK])))
 
 
+class Section(Serializable):
+    @classmethod
+    @stream_length_at_least(1)
+    def decode(cls, stream: bytes, graphic_control_extension: Optional[GraphicControlExtension]):
+        section_type = stream[0]
+        stream = stream[1:]
+
+        if section_type == SectionType.IMAGE:
+            return Image.decode(stream, graphic_control_extension)
+        if section_type == SectionType.EXTENSION:
+            return Extension.decode(stream)
+        if section_type == SectionType.TRAILER:
+            return Trailer.decode(stream)
+
+        raise ParseError(f"unknown section type: 0x{section_type:02X}")
+
+
 @dataclass
-class GraphicControlExtension(Serializable):
+class Trailer(Section):
+    @classmethod
+    def decode(cls, stream: bytes):
+        return stream, cls()
+
+    def encode(self):
+        return b""
+
+
+class Extension(Section):
+    @classmethod
+    @stream_length_at_least(1)
+    def decode(cls, stream: bytes):
+        extension_type = stream[0]
+        stream = stream[1:]
+
+        extension_class = {
+            ExtensionType.PLAIN_TEXT:      PlainTextExtension,
+            ExtensionType.GRAPHIC_CONTROL: GraphicControlExtension,
+            ExtensionType.COMMENT:         CommentExtension,
+            ExtensionType.APPLICATION:     ApplicationExtension
+        }.get(extension_type)
+
+        if extension_class is None:
+            raise ParseError(f"unknown extension type: 0x{stream[0]:02X}")
+
+        return extension_class.decode(stream)
+
+
+@dataclass
+class GraphicControlExtension(Extension):
     disposal_method: int
     waits_for_user_input: int
     delay_time: int
@@ -214,11 +261,8 @@ class GraphicControlExtension(Serializable):
              + encode_block([pack("<BHB", packed_fields, self.delay_time, self.transparent_color_index or 0)])
 
 
-class Section(Serializable): ...
-
-
 @dataclass
-class ApplicationExtension(Section):
+class ApplicationExtension(Extension):
     identifier: bytes
     authentication_code: bytes
     data: Block
@@ -243,7 +287,7 @@ class ApplicationExtension(Section):
 
 
 @dataclass
-class CommentExtension(Section):
+class CommentExtension(Extension):
     data: list[str]
 
     @classmethod
@@ -258,7 +302,7 @@ class CommentExtension(Section):
 
 
 @dataclass
-class PlainTextExtension(Section):
+class PlainTextExtension(Extension):
     top: int
     left: int
     width: int
@@ -388,44 +432,17 @@ class GIF(Serializable):
         graphic_control_extension: Optional[GraphicControlExtension] = None
         sections: list[Section] = []
         while True:
-            try:
-                section_type = SectionType(stream[0])
-            except IndexError:
-                raise ParseError("unexpected end of stream") from None
-            except ValueError:
-                raise ParseError(f"unknown section type: 0x{stream[0]:02x}") from None
-            else:
-                stream = stream[1:]
-
-            match section_type:
-                case SectionType.EXTENSION:
-                    try:
-                        extension_type = ExtensionType(stream[0])
-                    except IndexError:
-                        raise ParseError("unexpected end of stream") from None
-                    except ValueError:
-                        raise ParseError(f"unknown extension type: 0x{stream[0]:02x}") from None
-                    else:
-                        stream = stream[1:]
-
-                    match extension_type:
-                        case ExtensionType.APPLICATION:
-                            stream, application_extension = ApplicationExtension.decode(stream)
-                            sections.append(application_extension)
-                        case ExtensionType.COMMENT:
-                            stream, comment_extension = CommentExtension.decode(stream)
-                            sections.append(comment_extension)
-                        case ExtensionType.PLAIN_TEXT:
-                            stream, plain_text_extension = PlainTextExtension.decode(stream)
-                            sections.append(plain_text_extension)
-                        case ExtensionType.GRAPHIC_CONTROL:
-                            stream, graphic_control_extension = GraphicControlExtension.decode(stream)
-                case SectionType.IMAGE:
-                    stream, image = Image.decode(stream, graphic_control_extension)
-                    sections.append(image)
+            stream, section = Section.decode(stream, graphic_control_extension)
+            match section:
+                case GraphicControlExtension():
+                    graphic_control_extension = section
+                case Image():
                     graphic_control_extension = None
-                case SectionType.TRAILER:
+                    sections.append(section)
+                case Trailer():
                     break
+                case _:
+                    sections.append(section)
 
         return stream, cls(signature, version, screen, sections)
 
