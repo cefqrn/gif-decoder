@@ -308,7 +308,7 @@ class CommentExtension(Extension):
 
     def encode(self):
         return bytes([BlockType.EXTENSION, ExtensionType.COMMENT]) \
-             + encode_data_block(map(partial(str.encode, encoding="ASCII"), self.data))
+             + encode_data_block(list(map(partial(str.encode, encoding="ASCII"), self.data)))
 
 
 @dataclass
