@@ -33,7 +33,7 @@ def create_dictionary(minimum_code_size: int) -> list[Entry]:
 
 
 def byte_to_bits(byte: int) -> list[bool]:
-    return [(byte >> i) & 1 for i in range(8)]
+    return [bool((byte >> i) & 1) for i in range(8)]
 
 
 def decode(minimum_code_size: int, data: bytes) -> Generator[int, None, None]:
@@ -70,10 +70,10 @@ def decode(minimum_code_size: int, data: bytes) -> Generator[int, None, None]:
 @dataclass
 class TrieNode:
     code: int
-    children: dict[TrieNode] = field(default_factory=dict)
+    children: dict[int, TrieNode] = field(default_factory=dict)
 
 
-def encode_to_codes(dictionary: Sequence[int], data: Iterable[int]) -> Generator[int, None, None]:
+def encode_to_codes(dictionary: Sequence[int], data: Iterable[int]) -> Generator[tuple[int, int], None, None]:
     code_count = len(dictionary)
     if not code_count or code_count & (code_count - 1):
         raise ValueError("dictionary length must be power of 2")
@@ -107,10 +107,10 @@ def encode_to_codes(dictionary: Sequence[int], data: Iterable[int]) -> Generator
 
 
 def code_to_bits(code_size: int, x: int) -> list[bool]:
-    return [(x >> i) & 1 for i in range(code_size)][::-1]
+    return [bool((x >> i) & 1) for i in range(code_size)][::-1]
 
 
-def encode(dictionary: Sequence[int], data: Iterable[int]) -> Generator(int, None, None):
+def encode(dictionary: Sequence[int], data: Iterable[int]) -> Generator[int, None, None]:
     bitstream = chain.from_iterable(reversed(code_to_bits(code_size, code)) for code_size, code in encode_to_codes(dictionary, data))
     for batch in batched(chain(bitstream, 7*[False]), 8):
         batch = batch[::-1]

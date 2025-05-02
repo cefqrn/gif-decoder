@@ -209,12 +209,12 @@ class Extension(Block):
         stream = stream[1:]
 
         try:
-            extension_class = {
+            extension_class: Extension = {
                 ExtensionType.PLAIN_TEXT:      PlainTextExtension,
                 ExtensionType.GRAPHIC_CONTROL: GraphicControlExtension,
                 ExtensionType.COMMENT:         CommentExtension,
                 ExtensionType.APPLICATION:     ApplicationExtension
-            }[extension_type]
+            }[extension_type]  # type: ignore[index, assignment]
         except KeyError:
             return UnknownExtension.decode(stream, extension_type)
         else:
@@ -349,7 +349,10 @@ class Image(Block):
 
     def get_pixels(self, global_color_table: Optional[ColorTable]=None) -> list[list[Color]]:
         color_table = global_color_table if self.color_table is None else self.color_table
-        data = lzw.decode(self.minimum_code_size, chain.from_iterable(self.data))
+        data = lzw.decode(self.minimum_code_size, bytes(chain.from_iterable(self.data)))
+
+        if color_table is None:
+            raise ValueError("missing active color table")
 
         rows = [[replace(
                      color_table[i],
@@ -362,7 +365,7 @@ class Image(Block):
         if not self.is_interlaced:
             return rows
 
-        result = [None] * len(rows)
+        result: list[list[Color]] = [[]] * len(rows)
 
         end = 0
         for initial, stride in (0, 8), (4, 8), (2, 4), (1, 2):
