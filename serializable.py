@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from functools import wraps
-from typing import Self
 
 type Parsed[T] = tuple[memoryview, T]
 
@@ -9,9 +8,9 @@ class ParseError(ValueError): ...
 
 
 class Serializable(ABC):
-    @classmethod
+    @staticmethod
     @abstractmethod
-    def decode(cls, stream: memoryview, *args, **kwargs) -> Parsed[Self]:
+    def decode(stream: memoryview, *args, **kwargs):
         ...
 
     @abstractmethod
@@ -22,11 +21,11 @@ class Serializable(ABC):
 def stream_length_at_least(length):
     def wrapper(f):
         @wraps(f)
-        def inner(cls, stream, *args, **kwargs):
+        def inner(stream, *args, **kwargs):
             if len(stream) < length:
                 raise ParseError("unexpected end of stream")
 
-            return f(cls, stream, *args, **kwargs)
+            return f(stream, *args, **kwargs)
 
         return inner
 
