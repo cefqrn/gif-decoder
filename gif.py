@@ -163,20 +163,44 @@ def encode_data_block(block: DataBlock) -> bytes:
 
 
 class Block(Serializable):
-    @staticmethod
-    @stream_length_at_least(1)
-    def decode(stream, graphic_control_extension: Optional[GraphicControlExtension]):
-        block_type = stream[0]
-        stream = stream[1:]
+    ...
 
-        if block_type == BlockType.IMAGE:
-            return Image.decode(stream, graphic_control_extension)
-        if block_type == BlockType.EXTENSION:
-            return Extension.decode(stream)
-        if block_type == BlockType.TRAILER:
-            return Trailer.decode(stream)
 
-        raise ParseError(f"unknown section type: 0x{block_type:02X}")
+class Extension(Block):
+    ...
+
+
+@stream_length_at_least(1)
+def decode_block(stream, graphic_control_extension: Optional[GraphicControlExtension]):
+    block_type = stream[0]
+    stream = stream[1:]
+
+    if block_type == BlockType.IMAGE:
+        return Image.decode(stream, graphic_control_extension)
+    if block_type == BlockType.EXTENSION:
+        return decode_extension(stream)
+    if block_type == BlockType.TRAILER:
+        return Trailer.decode(stream)
+
+    raise ParseError(f"unknown section type: 0x{block_type:02X}")
+
+
+@stream_length_at_least(1)
+def decode_extension(stream):
+    extension_type = stream[0]
+    stream = stream[1:]
+
+    try:
+        extension_class: Extension = {
+            ExtensionType.PLAIN_TEXT:      PlainTextExtension,
+            ExtensionType.GRAPHIC_CONTROL: GraphicControlExtension,
+            ExtensionType.COMMENT:         CommentExtension,
+            ExtensionType.APPLICATION:     ApplicationExtension
+        }[extension_type]  # type: ignore[index, assignment]
+    except KeyError:
+        return UnknownExtension.decode(stream, extension_type)
+    else:
+        return extension_class.decode(stream)
 
 
 @dataclass(frozen=True)
@@ -187,26 +211,6 @@ class Trailer(Block):
 
     def encode(self):
         return b""
-
-
-class Extension(Block):
-    @staticmethod
-    @stream_length_at_least(1)
-    def decode(stream):
-        extension_type = stream[0]
-        stream = stream[1:]
-
-        try:
-            extension_class: Extension = {
-                ExtensionType.PLAIN_TEXT:      PlainTextExtension,
-                ExtensionType.GRAPHIC_CONTROL: GraphicControlExtension,
-                ExtensionType.COMMENT:         CommentExtension,
-                ExtensionType.APPLICATION:     ApplicationExtension
-            }[extension_type]  # type: ignore[index, assignment]
-        except KeyError:
-            return UnknownExtension.decode(stream, extension_type)
-        else:
-            return extension_class.decode(stream)
 
 
 @dataclass(frozen=True)
@@ -434,7 +438,7 @@ class GIF(Serializable):
         graphic_control_extension: Optional[GraphicControlExtension] = None
         blocks: list[Block] = []
         while True:
-            stream, block = Block.decode(stream, graphic_control_extension)
+            stream, block = decode_block(stream, graphic_control_extension)
             match block:
                 case GraphicControlExtension():
                     graphic_control_extension = block
