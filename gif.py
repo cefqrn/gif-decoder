@@ -162,16 +162,16 @@ def encode_data_block(block: DataBlock) -> bytes:
     return b"".join(map(encode_subblock, chain(block, [TERMINATOR_SUBBLOCK])))
 
 
-class Block(Serializable):
+class LabeledBlock(Serializable):
     ...
 
 
-class Extension(Block):
+class Extension(LabeledBlock):
     ...
 
 
 @stream_length_at_least(1)
-def decode_block(stream, graphic_control_extension: Optional[GraphicControlExtension]):
+def decode_labeled_block(stream, graphic_control_extension: Optional[GraphicControlExtension]):
     block_type = stream[0]
     stream = stream[1:]
 
@@ -204,7 +204,7 @@ def decode_extension(stream):
 
 
 @dataclass(frozen=True)
-class Trailer(Block):
+class Trailer(LabeledBlock):
     @staticmethod
     def decode(stream):
         return stream, Trailer()
@@ -328,7 +328,7 @@ class PlainTextExtension(Extension):
 
 
 @dataclass(frozen=True)
-class Image(Block):
+class Image(LabeledBlock):
     graphic_control_extension: Optional[GraphicControlExtension]
     left: int
     top: int
@@ -419,7 +419,7 @@ class GIF(Serializable):
     signature: bytes
     version: bytes
     screen: Screen
-    blocks: tuple[Block, ...]  # blocks after the screen descriptor, not including the trailer
+    blocks: tuple[LabeledBlock, ...]  # blocks after the screen descriptor, not including the trailer
 
     @staticmethod
     @stream_length_at_least(6)
@@ -436,9 +436,9 @@ class GIF(Serializable):
         stream, screen = Screen.decode(stream)
 
         graphic_control_extension: Optional[GraphicControlExtension] = None
-        blocks: list[Block] = []
+        blocks: list[LabeledBlock] = []
         while True:
-            stream, block = decode_block(stream, graphic_control_extension)
+            stream, block = decode_labeled_block(stream, graphic_control_extension)
             match block:
                 case GraphicControlExtension():
                     graphic_control_extension = block
