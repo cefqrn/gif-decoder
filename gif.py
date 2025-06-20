@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from serializable import ParseError, Parsed, Serializable, stream_length_at_least
+from serializable import ParseError, Parsed, Serializable, Stream, stream_length_at_least
 import lzw
 
 from collections.abc import Sequence
@@ -14,7 +14,8 @@ from itertools import batched, chain, repeat
 from struct import pack, unpack
 from enum import IntEnum
 
-from typing import ClassVar, Optional
+from typing import Any, ClassVar, Optional, overload
+from abc import abstractmethod
 
 type SubBlock = bytes
 type DataBlock = tuple[SubBlock, ...]
@@ -43,10 +44,10 @@ class Color(Serializable):
 
     @staticmethod
     @stream_length_at_least(3)
-    def decode(stream):
-        return stream[3:], Color(*stream[:3])
+    def decode(stream: Stream) -> Parsed[Color]:
+        return stream[3:], Color(stream[0], stream[1], stream[2])
 
-    def encode(self):
+    def encode(self) -> bytes:
         return bytes([self.red, self.green, self.blue])
 
 
@@ -59,7 +60,7 @@ class ColorTable(Sequence[Color], Serializable):
     is_sorted: bool
 
     @staticmethod
-    def decode(stream, size: int, is_sorted: bool):
+    def decode(stream: Stream, size: int, is_sorted: bool) -> Parsed[ColorTable]:
         if size not in range(1, ColorTable.MAX_SIZE + 1):
             raise ParseError("invalid color table size")
 
@@ -70,7 +71,7 @@ class ColorTable(Sequence[Color], Serializable):
 
         return stream, ColorTable(tuple(data), is_sorted)
 
-    def encode(self):
+    def encode(self) -> bytes:
         if len(self) == 0:
             return b""
 
@@ -79,10 +80,15 @@ class ColorTable(Sequence[Color], Serializable):
 
         return b"".join(map(Color.encode, chain(self.data, repeat(self.PADDING_COLOR, padding_length))))
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, i):
+    @overload
+    def __getitem__(self, i: int, /) -> Color: ...
+    @overload
+    def __getitem__(self, i: slice[Any, Any, Any], /) -> Sequence[Color]: ...
+
+    def __getitem__(self, i: int | slice[Any, Any, Any], /) -> Color | Sequence[Color]:
         return self.data[i]
 
 
@@ -97,7 +103,7 @@ class Screen(Serializable):
 
     @staticmethod
     @stream_length_at_least(7)
-    def decode(stream):
+    def decode(stream: Stream) -> Parsed[Screen]:
         width, height, packed_fields, background_color_index, pixel_aspect_ratio = unpack("<HHBBB", stream[:7])
         stream = stream[7:]
 
@@ -112,7 +118,7 @@ class Screen(Serializable):
 
         return stream, Screen(width, height, color_table, color_resolution, background_color_index, pixel_aspect_ratio)
 
-    def encode(self):
+    def encode(self) -> bytes:
         packed_fields = self.color_resolution << 4
         if self.color_table is not None:
             packed_fields |=                                              1 << 7  # has color table
@@ -126,7 +132,7 @@ class Screen(Serializable):
         return result
 
 
-def decode_subblock(stream: memoryview) -> Parsed[SubBlock]:
+def decode_subblock(stream: Stream) -> Parsed[SubBlock]:
     if len(stream) < 1:
         raise ParseError("unexpected end of stream")
 
@@ -146,7 +152,7 @@ def encode_subblock(subblock: SubBlock) -> bytes:
 TERMINATOR_SUBBLOCK = b""
 
 
-def decode_data_block(stream: memoryview) -> Parsed[DataBlock]:
+def decode_data_block(stream: Stream) -> Parsed[DataBlock]:
     block = []
     while True:
         stream, subblock = decode_subblock(stream)
@@ -163,15 +169,21 @@ def encode_data_block(block: DataBlock) -> bytes:
 
 
 class LabeledBlock(Serializable):
-    ...
+    @staticmethod
+    @abstractmethod
+    def decode(stream: Stream, *args: Any, **kwargs: Any) -> Parsed[LabeledBlock]:
+        ...
 
 
 class Extension(LabeledBlock):
-    ...
+    @staticmethod
+    @abstractmethod
+    def decode(stream: Stream, *args: Any, **kwargs: Any) -> Parsed[Extension]:
+        ...
 
 
 @stream_length_at_least(1)
-def decode_labeled_block(stream, graphic_control_extension: Optional[GraphicControlExtension]):
+def decode_labeled_block(stream: Stream, graphic_control_extension: Optional[GraphicControlExtension]) -> Parsed[LabeledBlock]:
     block_type = stream[0]
     stream = stream[1:]
 
@@ -186,7 +198,7 @@ def decode_labeled_block(stream, graphic_control_extension: Optional[GraphicCont
 
 
 @stream_length_at_least(1)
-def decode_extension(stream):
+def decode_extension(stream: Stream) -> Parsed[Extension]:
     extension_type = stream[0]
     stream = stream[1:]
 
@@ -206,10 +218,10 @@ def decode_extension(stream):
 @dataclass(frozen=True)
 class Trailer(LabeledBlock):
     @staticmethod
-    def decode(stream):
+    def decode(stream: Stream) -> Parsed[Trailer]:
         return stream, Trailer()
 
-    def encode(self):
+    def encode(self) -> bytes:
         return b""
 
 
@@ -219,11 +231,11 @@ class UnknownExtension(Extension):
     data: DataBlock
 
     @staticmethod
-    def decode(stream, extension_type: int):
+    def decode(stream: Stream, extension_type: int) -> Parsed[UnknownExtension]:
         stream, data = decode_data_block(stream)
         return stream, UnknownExtension(extension_type, data)
 
-    def encode(self):
+    def encode(self) -> bytes:
         return bytes([BlockType.EXTENSION, self.extension_type]) + encode_data_block(self.data)
 
 
@@ -235,7 +247,7 @@ class GraphicControlExtension(Extension):
     transparent_color_index: Optional[int]
 
     @staticmethod
-    def decode(stream):
+    def decode(stream: Stream) -> Parsed[GraphicControlExtension]:
         stream, block = decode_data_block(stream)
         if len(block) != 1:
             raise ParseError("too many blocks in graphic control extension")
@@ -253,8 +265,7 @@ class GraphicControlExtension(Extension):
 
         return stream, GraphicControlExtension(disposal_method, waits_for_user_input, delay_time, transparent_color_index)
 
-
-    def encode(self):
+    def encode(self) -> bytes:
         packed_fields = (self.disposal_method << 2) | (self.waits_for_user_input << 1)
         if self.transparent_color_index is not None:
             packed_fields |= 1 << 0  # has transparent color
@@ -270,7 +281,7 @@ class ApplicationExtension(Extension):
     data: DataBlock
 
     @staticmethod
-    def decode(stream):
+    def decode(stream: Stream) -> Parsed[ApplicationExtension]:
         stream, block = decode_data_block(stream)
         if len(block) < 1:
             raise ParseError("empty application extension")
@@ -283,7 +294,7 @@ class ApplicationExtension(Extension):
 
         return stream, ApplicationExtension(identifier, authentication_code, block[1:])
 
-    def encode(self):
+    def encode(self) -> bytes:
         return bytes([BlockType.EXTENSION, ExtensionType.APPLICATION]) \
              + encode_data_block((self.identifier + self.authentication_code, *self.data))
 
@@ -293,12 +304,12 @@ class CommentExtension(Extension):
     data: tuple[str, ...]
 
     @staticmethod
-    def decode(stream):
+    def decode(stream: Stream) -> Parsed[CommentExtension]:
         stream, block = decode_data_block(stream)
 
         return stream, CommentExtension(tuple(map(partial(bytes.decode, encoding="ASCII"), block)))
 
-    def encode(self):
+    def encode(self) -> bytes:
         return bytes([BlockType.EXTENSION, ExtensionType.COMMENT]) \
              + encode_data_block(tuple(map(partial(str.encode, encoding="ASCII"), self.data)))
 
@@ -316,13 +327,13 @@ class PlainTextExtension(Extension):
     data: DataBlock
 
     @staticmethod
-    def decode(stream):
+    def decode(stream: Stream) -> Parsed[PlainTextExtension]:
         stream, block = decode_data_block(stream)
         top, left, width, height, cell_width, cell_height, foreground_color_index, background_color_index = unpack("<HHHHBBBB", block[0])
 
         return stream, PlainTextExtension(top, left, width, height, cell_width, cell_height, foreground_color_index, background_color_index, block[1:])
 
-    def encode(self):
+    def encode(self) -> bytes:
         return bytes([BlockType.EXTENSION, ExtensionType.PLAIN_TEXT]) \
              + encode_data_block((pack("<HHHHBBBB", self.top, self.left, self.width, self.height, self.cell_width, self.cell_height, self.foreground_color_index, self.background_color_index), *self.data))
 
@@ -370,7 +381,7 @@ class Image(LabeledBlock):
 
     @staticmethod
     @stream_length_at_least(9)
-    def decode(stream, graphic_control_extension: GraphicControlExtension):
+    def decode(stream: Stream, graphic_control_extension: Optional[GraphicControlExtension]) -> Parsed[Image]:
         left, top, width, height, packed_fields = unpack("<HHHHB", stream[:9])
         stream = stream[9:]
 
@@ -392,7 +403,7 @@ class Image(LabeledBlock):
 
         return stream, Image(graphic_control_extension, left, top, width, height, color_table, is_interlaced, minimum_code_size, data)
 
-    def encode(self):
+    def encode(self) -> bytes:
         packed_fields = self.is_interlaced << 6
         if self.color_table is not None:
             packed_fields |=                                              1 << 7  # has color table
@@ -423,7 +434,7 @@ class GIF(Serializable):
 
     @staticmethod
     @stream_length_at_least(6)
-    def decode(stream):
+    def decode(stream: Stream) -> Parsed[GIF]:
         signature, version = stream[:3].tobytes(), stream[3:6].tobytes()
         stream = stream[6:]
 
@@ -452,7 +463,7 @@ class GIF(Serializable):
 
         return stream, GIF(signature, version, screen, tuple(blocks))
 
-    def encode(self):
+    def encode(self) -> bytes:
         result = self.signature + self.version
         result += self.screen.encode()
         result += b"".join(map(lambda x: x.encode(), self.blocks))
